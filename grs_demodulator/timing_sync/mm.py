@@ -54,7 +54,16 @@ class MM:
         :return: A list with the extracted bits.
         :rtype: list
         """
-        samples     = np.array(data, dtype=np.float128)
+        # np.longdouble, e nao np.float128: o segundo e um alias que so existe
+        # nas plataformas onde o long double tem 128 bits (Linux/glibc). No
+        # Windows ele nunca existiu, e no numpy 2.0 sumiu de vez de onde nao
+        # existia. np.longdouble e o nome portatil da MESMA precisao: 128 bits
+        # onde ha, 64 onde nao ha.
+        #
+        # Era provavelmente por isso que o setup.py recusava Windows. Recusar a
+        # plataforma inteira por causa de um nome de dtype custava caro: o teste
+        # ponta a ponta da estacao nao conseguia importar este pacote.
+        samples     = np.array(data, dtype=np.longdouble)
         out         = np.zeros(len(samples) + int(2*self._sps), dtype=np.complex128)
         out_rail    = np.zeros(len(samples) + int(2*self._sps), dtype=np.complex128)
 
@@ -98,7 +107,7 @@ class MM:
         :return: A list with the extracted bits.
         :rtype: list
         """
-        samples = np.array(data, dtype=np.float128)
+        samples = np.array(data, dtype=np.longdouble)
 
         mu = self._mu   # Initial estimate of phase of sample
         gain = self._gain
