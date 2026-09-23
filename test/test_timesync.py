@@ -21,6 +21,14 @@
 #
 
 import random
+# matplotlib e dependencia SO destes arquivos de visualizacao, e nao entra no
+# requirements.txt porque iria junto para a imagem do servico. Sem o skip, o
+# `test-all` da estacao reporta o repositorio inteiro como falho por causa de
+# uma biblioteca de grafico que o demodulador nao usa para demodular.
+import pytest
+
+pytest.importorskip("matplotlib")
+
 import matplotlib.pyplot as plt
 import numpy as np
 
