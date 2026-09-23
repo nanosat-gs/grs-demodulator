@@ -23,13 +23,17 @@
 #
 
 import setuptools
-import os
 
 #from sphinx.setup_command import BuildDoc
 
-# Make sure we are running on posix (Linux, Unix, MAC OSX)
-if os.name != 'posix':
-    sys.exit("Sorry, Windows is not supported yet!")
+# The posix-only guard that used to live here is gone. Nothing in this package
+# is posix-specific -- it is numpy, scipy and pyzmq, all of which ship Windows
+# wheels. The guard blocked `pip install -e .` on the machines where the
+# ground station is actually developed, which meant the station's end-to-end
+# test could not import the demodulator and had to be run inside a container.
+#
+# It was also broken on its own terms: it called sys.exit() without importing
+# sys, so instead of the friendly message it raised NameError.
 
 exec(open('grs_demodulator/version.py').read())
 
