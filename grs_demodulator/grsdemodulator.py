@@ -73,6 +73,18 @@ class GRSDemodulator:
     # half a second at 4800 baud.
     DEMOD_DEFAULT_WINDOW_SYMBOLS = 2400
 
+    # Rastreador do desvio de frequência residual (erro de sintonia, Doppler
+    # que a sintonia não corrigiu). Constante de tempo longa, porque ele só
+    # aprende com amostras de sinal (ver DC_GATE) e segura o valor no silêncio.
+    DEMOD_DEFAULT_DC_TAU_S = 0.2
+
+    # Uma amostra só entra no rastreador se o discriminador der menos que
+    # isto, em unidades de desvio nominal (±1 = ±baud/4). Ruído puro dá valores
+    # espalhados por ±100 (fase aleatória vezes o ganho); sinal dá ±1 mais o
+    # desvio. Sem este portão, cada silêncio entre rajadas puxava a estimativa
+    # de volta para zero, e a rajada seguinte chegava sem correção nenhuma.
+    DC_GATE = 3.0
+
     DEMOD_DEFAULT_IQ_SOURCE = "tcp://localhost:5556"
     DEMOD_DEFAULT_BITS_BIND = "tcp://*:5555"
 
@@ -120,10 +132,15 @@ class GRSDemodulator:
                 + " samples per symbol at " + str(self._baudrate) + " baud; need at least 2"
             )
 
+        self._dc_tau_s = float(source.get("GRS_DEMOD_DC_TAU_S", self.DEMOD_DEFAULT_DC_TAU_S))
+        if self._dc_tau_s <= 0:
+            raise ValueError("GRS_DEMOD_DC_TAU_S must be positive, got " + str(self._dc_tau_s))
+
         self._mod = GMSK(self._bt, self._baudrate)
         self._mm = MM(self._fs, self._baudrate)
 
         self._build_lpf_taps(self._fs)
+        self._build_streaming_state()
 
         self._zmq_ctx = None
         self._in_socket = None
@@ -257,13 +274,59 @@ class GRSDemodulator:
         """
         samples = np.frombuffer(buf, dtype=np.complex64)
 
+        # Cada etapa guarda o próprio estado entre janelas. A janela é só o
+        # tamanho do lote em que o IQ chega; se dividir o fluxo em janelas
+        # mudasse o resultado, todo pacote que atravessasse uma fronteira
+        # sairia corrompido — e saía, um em cada quatro, antes disto.
         filtered_samples, self._zi = lfilter(self._taps, [1.0], samples, zi=self._zi)
 
-        soft_symbols, _ = self._mod.demodulate(self._fs, filtered_samples)
+        # Discriminador de frequência. A primeira diferença de fase da janela
+        # usa a última amostra da janela anterior, e não zero.
+        previous = np.concatenate(([self._last_sample], filtered_samples[:-1]))
+        self._last_sample = filtered_samples[-1]
+        frequency = self._disc_gain * np.angle(filtered_samples * np.conj(previous))
+
+        # Desvio de frequência (erro de sintonia, Doppler residual) vira nível
+        # DC aqui. Antes se subtraía a MÉDIA DA JANELA: num sinal em rajadas a
+        # média mistura rajada e silêncio, fica longe do desvio real, e dá um
+        # degrau a cada fronteira. Aqui é uma média exponencial PONDERADA pelo
+        # portão: soma(peso·x) / soma(peso), as duas contínuas entre janelas.
+        # Mede-se tolerância de ~500 Hz; acima de ~1 kHz, quem tem de corrigir
+        # é a sintonia (Station Manager -> sintetizador), não o demodulador.
+        gate = (np.abs(frequency) < self.DC_GATE).astype(np.float64)
+        weighted, self._dc_num_zi = lfilter(
+            self._dc_b, self._dc_a, frequency * gate, zi=self._dc_num_zi
+        )
+        weight, self._dc_den_zi = lfilter(self._dc_b, self._dc_a, gate, zi=self._dc_den_zi)
+        frequency = frequency - weighted / np.maximum(weight, 1e-9)
+
+        # Filtro casado com estado, como o passa-baixa acima. A convolução
+        # "same" de antes truncava as bordas de cada janela.
+        soft_symbols, self._mf_zi = lfilter(self._mf_taps, [1.0], frequency, zi=self._mf_zi)
 
         bits = self._mm.decode_stream(soft_symbols)
 
         return list(map(int, bits))
+
+    def _build_streaming_state(self):
+        """
+        Taps and initial state of every stage that must survive a window
+        boundary: discriminator, DC tracker, matched filter.
+        """
+        # Mesmo ganho de GMSK.demodulate: desvio de ±baud/4 -> ±1.
+        self._disc_gain = self._fs / (0.5 * np.pi * self._baudrate)
+        self._last_sample = np.complex64(0)
+
+        alpha = 1.0 - np.exp(-1.0 / (self._dc_tau_s * self._fs))
+        self._dc_b = np.array([alpha])
+        self._dc_a = np.array([1.0, -(1.0 - alpha)])
+        self._dc_num_zi = np.zeros(1)
+        self._dc_den_zi = np.zeros(1)
+
+        self._mf_taps = self._mod._gaussian_matched_filter(
+            1 / self._baudrate, int(self._sps), 1
+        )
+        self._mf_zi = np.zeros(len(self._mf_taps) - 1)
 
     def _build_lpf_taps(self, fs, window="hamming", beta=6.76):
         """

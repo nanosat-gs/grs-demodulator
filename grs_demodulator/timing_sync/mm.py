@@ -42,7 +42,22 @@ class MM:
         self._mu        = _TIME_SYNC_INITIAL_MU             # Initial estimate of phase of sample
         self._out_rail  = np.zeros(2, dtype=np.complex128)  # Stores the last two output rail values
         self._out       = np.zeros(2, dtype=np.complex128)  # Stores the last two output values
-        self._gain      = _TIME_SYNC_GAIN
+        # O ganho é por SÍMBOLO, mas `mu` é contado em AMOSTRAS. Sem escalar
+        # por sps, a 50 amostras por símbolo o laço corrigia 50x menos do que
+        # o pretendido: levava milhares de símbolos para se mover uma amostra,
+        # ou seja, não rastreava nada. Funcionava no simulador só porque os
+        # símbolos dele começam alinhados na amostra 0; com fase arbitrária
+        # (qualquer sinal real) perdia um quarto dos pacotes. Medido na
+        # tools/bancada_demod.py do grs-station.
+        self._gain      = _TIME_SYNC_GAIN * self._sps
+        # Quantas amostras do PRÓXIMO bloco pular antes do próximo símbolo.
+        # O laço avança ~sps amostras por símbolo, e o último avanço de um
+        # bloco quase sempre cai além do fim dele. Antes isto era descartado e
+        # o bloco seguinte recomeçava no índice 0 — um salto de fase de até um
+        # símbolo inteiro a cada fronteira de janela, que aparecia como bit
+        # repetido ou perdido (espaçamentos de 3201 bits num quadro de 3200) e
+        # corrompia todo pacote que atravessasse a fronteira.
+        self._skip      = 0
 
     def decode_stream(self, data):
         """
@@ -71,11 +86,11 @@ class MM:
         out[:2]         = self._out
         out_rail[:2]    = self._out_rail
 
-        i_in    = 0 # Input samples index
-        i_out   = 2 # Output index (let first two outputs be from previous state)
+        i_in    = self._skip    # Continua de onde o bloco anterior parou
+        i_out   = 2             # Output index (let first two outputs be from previous state)
 
-        while i_out < len(samples) and i_in + 1 < len(samples):
-            out[i_out] = samples[i_in + int(self._mu)]  # Grab what we think is the "best" sample
+        while i_out < len(out) and i_in < len(samples):
+            out[i_out] = samples[i_in]  # Grab what we think is the "best" sample
             out_rail[i_out] = int(np.real(out[i_out]) > 0) + 1j * int(np.imag(out[i_out]) > 0)
 
             x = (out_rail[i_out] - out_rail[i_out - 2]) * np.conj(out[i_out - 1])
@@ -91,6 +106,7 @@ class MM:
         # Update the state for the next iteration
         self._out       = out[i_out - 2:i_out]      # Store the last two output values
         self._out_rail  = out_rail[i_out - 2:i_out] # Store the last two output rail values
+        self._skip      = i_in - len(samples)       # >= 0: onde o próximo bloco começa
 
         # Extract bits from the current chunk
         out = out[2:i_out]  # Remove the first two, and anything after i_out (that was never filled out)
@@ -145,3 +161,4 @@ class MM:
         self._mu        = _TIME_SYNC_INITIAL_MU
         self._out       = np.zeros(2, dtype=np.complex128)
         self._out_rail  = np.zeros(2, dtype=np.complex128)
+        self._skip      = 0
