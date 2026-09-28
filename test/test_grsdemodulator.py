@@ -143,6 +143,41 @@ def test_bit_envelope_has_no_topic_frame():
     assert len(demod._out_socket.sent) == 1
 
 
+class _FakeInSocket:
+    """recv() hands out the queued payloads, then times out like RCVTIMEO."""
+
+    def __init__(self, payloads):
+        self._payloads = list(payloads)
+
+    def recv(self):
+        import zmq
+
+        if not self._payloads:
+            raise zmq.Again()
+        return self._payloads.pop(0)
+
+
+def test_partial_window_is_processed_when_the_stream_pauses():
+    """
+    End of a replay: the last half-window used to sit in the buffer until the
+    next source started, and the frame inside it was lost. On the idle
+    timeout it is processed instead.
+    """
+    demod = GRSDemodulator(env={})
+    demod._out_socket = _FakeSocket()
+    frame, _, _ = demod._mod.modulate([0xAA] * 8, L=int(demod._sps))
+    short = frame.astype(np.complex64).tobytes()
+    assert len(short) < demod.window_bytes
+    demod._in_socket = _FakeInSocket([short])
+
+    assert demod._step() == 0          # got data, window not full: waits
+    published = demod._step()          # idle timeout: drains what is there
+
+    assert published > 0
+    assert len(demod._out_socket.sent) == 1
+    assert demod._step() == 0          # nothing left, nothing sent twice
+
+
 def test_iq_envelope_is_read_as_complex64():
     """
     Eight bytes per sample, float32 I then float32 Q, little endian -- the

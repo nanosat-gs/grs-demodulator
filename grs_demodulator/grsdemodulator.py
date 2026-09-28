@@ -73,6 +73,9 @@ class GRSDemodulator:
     # half a second at 4800 baud.
     DEMOD_DEFAULT_WINDOW_SYMBOLS = 2400
 
+    # With no IQ for this long, the buffered partial window is processed.
+    DEMOD_IDLE_FLUSH_MS = 300
+
     # Rastreador do desvio de frequência residual (erro de sintonia, Doppler
     # que a sintonia não corrigiu). Constante de tempo longa, porque ele só
     # aprende com amostras de sinal (ver DC_GATE) e segura o valor no silêncio.
@@ -196,29 +199,49 @@ class GRSDemodulator:
 
         try:
             while True:
-                self._samples_buf.extend(self._in_socket.recv())
-
-                if len(self._samples_buf) < self.window_bytes:
-                    continue
-
-                # Only whole samples: a window boundary must never split a
-                # complex64 in half, or every subsequent sample is shifted by
-                # four bytes and the stream turns to noise silently.
-                usable = (len(self._samples_buf) // 8) * 8
-                chunk = bytes(self._samples_buf[:usable])
-                del self._samples_buf[:usable]
-
-                bits = self._process_samples(chunk)
-
-                if bits:
-                    self._publish_bits(bits)
-                    total_bits += len(bits)
-
+                total_bits += self._step()
         except KeyboardInterrupt:
             print("grs-demodulator: interrupted after " + str(total_bits) + " bits", flush=True)
             return 0
         finally:
             self.close()
+
+    def _step(self):
+        """
+        One receive, and the processing it triggers.
+
+        A window is processed when it fills. If the stream PAUSES instead
+        (end of a replay, the source being switched), whatever is buffered is
+        processed at the idle timeout -- otherwise the last partial window,
+        and the frame inside it, would sit there until the next source
+        started. Processing a short chunk is safe because every stage keeps
+        its state across calls.
+
+        :return: How many bits were published.
+        """
+        try:
+            self._samples_buf.extend(self._in_socket.recv())
+        except zmq.Again:
+            return self._drain() if len(self._samples_buf) >= 8 else 0
+
+        if len(self._samples_buf) < self.window_bytes:
+            return 0
+
+        return self._drain()
+
+    def _drain(self):
+        # Only whole samples: a window boundary must never split a complex64
+        # in half, or every subsequent sample is shifted by four bytes and the
+        # stream turns to noise silently.
+        usable = (len(self._samples_buf) // 8) * 8
+        chunk = bytes(self._samples_buf[:usable])
+        del self._samples_buf[:usable]
+
+        bits = self._process_samples(chunk)
+        if bits:
+            self._publish_bits(bits)
+
+        return len(bits)
 
     def _publish_bits(self, bits):
         """
@@ -243,6 +266,8 @@ class GRSDemodulator:
         # blocks mid-pass.
         self._in_socket.setsockopt(zmq.RCVHWM, 1000000)
         self._in_socket.setsockopt(zmq.RCVBUF, 2097152)
+        # Idle timeout: see _step().
+        self._in_socket.setsockopt(zmq.RCVTIMEO, self.DEMOD_IDLE_FLUSH_MS)
 
         self._out_socket = self._zmq_ctx.socket(zmq.PUB)
         self._out_socket.bind(self._bits_bind)
