@@ -53,4 +53,4 @@ jobs:
 
       - name: Execute the tests
         run: |
-          pytest tests/
+          pytest test/
