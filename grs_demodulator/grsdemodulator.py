@@ -27,6 +27,7 @@ import zmq
 
 from scipy.signal import lfilter_zi, firwin, lfilter
 from grs_demodulator.gmsk import GMSK
+from grs_demodulator.timing_sync.gardner import Gardner
 from grs_demodulator.timing_sync.mm import MM
 
 
@@ -88,6 +89,12 @@ class GRSDemodulator:
     # de volta para zero, e a rajada seguinte chegava sem correção nenhuma.
     DC_GATE = 3.0
 
+    # Sincronismo de símbolo. `gardner` é o padrão desde que se mediu o M&M
+    # cego no preâmbulo (timing_sync/gardner.py). `mm` fica para comparar ao
+    # vivo e para voltar atrás sem rebuild.
+    DEMOD_DEFAULT_TIMING = "gardner"
+    TIMING_CHOICES = ("gardner", "mm")
+
     DEMOD_DEFAULT_IQ_SOURCE = "tcp://localhost:5556"
     DEMOD_DEFAULT_BITS_BIND = "tcp://*:5555"
 
@@ -139,8 +146,18 @@ class GRSDemodulator:
         if self._dc_tau_s <= 0:
             raise ValueError("GRS_DEMOD_DC_TAU_S must be positive, got " + str(self._dc_tau_s))
 
+        self._timing_name = source.get("GRS_DEMOD_TIMING", self.DEMOD_DEFAULT_TIMING).strip().lower()
+        if self._timing_name not in self.TIMING_CHOICES:
+            raise ValueError(
+                "GRS_DEMOD_TIMING must be one of " + ", ".join(self.TIMING_CHOICES)
+                + ", got " + repr(self._timing_name)
+            )
+
         self._mod = GMSK(self._bt, self._baudrate)
-        self._mm = MM(self._fs, self._baudrate)
+        if self._timing_name == "gardner":
+            self._timing = Gardner(self._fs, self._baudrate)
+        else:
+            self._timing = MM(self._fs, self._baudrate)
 
         self._build_lpf_taps(self._fs)
         self._build_streaming_state()
@@ -191,7 +208,7 @@ class GRSDemodulator:
         )
         print(
             "grs-demodulator: window " + str(self._window_symbols) + " symbols ("
-            + str(self.window_bytes) + " bytes)",
+            + str(self.window_bytes) + " bytes), timing " + self._timing_name,
             flush=True,
         )
 
@@ -329,7 +346,7 @@ class GRSDemodulator:
         # "same" de antes truncava as bordas de cada janela.
         soft_symbols, self._mf_zi = lfilter(self._mf_taps, [1.0], frequency, zi=self._mf_zi)
 
-        bits = self._mm.decode_stream(soft_symbols)
+        bits = self._timing.decode_stream(soft_symbols)
 
         return list(map(int, bits))
 

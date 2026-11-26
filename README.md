@@ -38,7 +38,7 @@ The demodulation pipeline consists of a frequency discriminator, a Gaussian matc
    - **Residual offset tracking** (`station` branch): a slow tracker removes the leftover frequency offset (tuning error, Doppler the tuning did not correct). It only learns from signal samples and holds its value during the silence between bursts.
 2. **Gaussian Matched Filter**: Applies a Gaussian filter matched to the BT product to reduce inter-symbol interference.
 3. **Normalization**: Centers and scales the filtered signal for reliable symbol decisions.
-4. **Timing Recovery**: Synchronizes the sampling instants to the symbol boundaries (Mueller & Müller).
+4. **Timing Recovery**: Synchronizes the sampling instants to the symbol boundaries. Gardner in the `test/bancada-rf` branch (Mueller & Müller before; see below).
 5. **Hard Decision**: Thresholds the recovered soft symbols into a binary bitstream.
 
 ## Dependencies
@@ -109,6 +109,7 @@ boundary.
 | `GRS_DEMOD_BT` | `0.5` | Gaussian filter BT product |
 | `GRS_DEMOD_WINDOW_SYMBOLS` | `2400` | Symbols per processing window (latency vs. overhead; state is kept across windows) |
 | `GRS_DEMOD_DC_TAU_S` | `0.2` | Time constant of the residual offset tracker, in seconds |
+| `GRS_DEMOD_TIMING` | `gardner` | Symbol timing recovery: `gardner`, or `mm` (Mueller & Müller, the previous one; kept to compare and to roll back without a rebuild). Anything else aborts the boot |
 
 At least 2 samples per symbol are required. When the IQ stream stops for
 300 ms, the buffered partial window is processed, so the last packet of a
@@ -126,7 +127,29 @@ burst is not held back.
 - `np.float128` → `np.longdouble` (portability) and installation outside POSIX.
 - Plotting tests skipped when `matplotlib` is not installed.
 
-### Tests
+### Changes in the `test/bancada-rf` branch
+
+Bench version (RF bench of the ground station), not merged into `station`.
+
+- **Gardner timing recovery instead of Mueller & Müller.** The M&M error is
+  exactly zero on the alternating `0xAA` preamble, at any phase, so the loop
+  only started correcting at the syncword. Between bursts it held its phase,
+  and a burst arriving a fraction of a symbol away from the previous one lost
+  isolated syncword bits: 7 to 9% of the frames on the RF bench, in both
+  chains, and ~5% in simulation with the FS-2's 4-byte preamble. The Gardner
+  error uses the sample between two symbols and locks during the preamble.
+  It is normalized by its own pair of samples (amplitude-independent, bounded
+  to ±1) and interpolated, so half a symbol is not a fixed point of the sample
+  grid. Measured: 0 of 200 frames lost from random burst phases, at 4800 and
+  1200 baud, with the 4-byte preamble; same losses as the M&M at its best
+  (bursts all on the same phase) down to the SNR where both fail.
+  `test/test_gardner.py` fails with `GRS_DEMOD_TIMING=mm`.
+- Known limitation, unchanged: the residual offset tracker forgets most of
+  the offset during a 0.5 s silence (its gate lets ~75% of the filtered noise
+  through). With the 4-byte preamble, at 4800 baud, 300 Hz of residual still
+  loses nothing and 500 Hz loses ~90% (the M&M too) — not the ~500 Hz of
+  tolerance measured with long preambles.
+
 
 ```
 pip install -r requirements.txt pytest

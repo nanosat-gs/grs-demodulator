@@ -108,6 +108,27 @@ def test_zero_window_is_refused():
         GRSDemodulator(env={"GRS_DEMOD_WINDOW_SYMBOLS": "0"})
 
 
+def test_timing_recovery_is_gardner_by_default():
+    """O M&M é cego no preâmbulo alternado; ver test_gardner.py."""
+    from grs_demodulator.timing_sync.gardner import Gardner
+
+    assert isinstance(GRSDemodulator(env={})._timing, Gardner)
+
+
+def test_mm_stays_selectable_for_comparison():
+    from grs_demodulator.timing_sync.mm import MM
+
+    demod = GRSDemodulator(env={"GRS_DEMOD_TIMING": "MM"})
+
+    assert isinstance(demod._timing, MM)
+
+
+def test_unknown_timing_recovery_is_refused():
+    """Um nome errado no .env não pode cair calado no padrão."""
+    with pytest.raises(ValueError, match="GRS_DEMOD_TIMING"):
+        GRSDemodulator(env={"GRS_DEMOD_TIMING": "gardener"})
+
+
 class _FakeSocket:
     def __init__(self):
         self.sent = []
