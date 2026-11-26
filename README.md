@@ -135,8 +135,11 @@ Bench version (RF bench of the ground station), not merged into `station`.
   exactly zero on the alternating `0xAA` preamble, at any phase, so the loop
   only started correcting at the syncword. Between bursts it held its phase,
   and a burst arriving a fraction of a symbol away from the previous one lost
-  isolated syncword bits: 7 to 9% of the frames on the RF bench, in both
-  chains, and ~5% in simulation with the FS-2's 4-byte preamble. The Gardner
+  isolated syncword bits. Live on the RF bench (beacon every 5 s, 32-byte
+  preamble), the M&M lost 6 of 120 VHF frames and 11 of 120 UHF; the Gardner,
+  0 of 240 in both chains. With the FS-2's 4-byte preamble, in simulation
+  (`grs-station/tools/bancada_demod.py`), the M&M keeps 84 of 96 frames at
+  4800 baud and 68 of 121 at 1200; the Gardner, all of them. The Gardner
   error uses the sample between two symbols and locks during the preamble.
   It is normalized by its own pair of samples (amplitude-independent, bounded
   to ±1) and interpolated, so half a symbol is not a fixed point of the sample

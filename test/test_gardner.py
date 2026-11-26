@@ -21,7 +21,7 @@
 #
 
 """
-Regressão da perda de 7 a 9% dos quadros na bancada RF.
+Regressão da perda de 5 a 9% dos quadros na bancada RF.
 
 O Mueller & Müller dá erro zero num preâmbulo alternado, em qualquer fase:
 só começava a corrigir no syncword. No silêncio ele segura a fase, então uma

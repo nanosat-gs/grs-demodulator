@@ -44,7 +44,8 @@ class Gardner:
     decisões, e num `1010...` todos os picos têm a mesma altura em qualquer
     fase -- o erro dá exatamente zero. Ele só começava a corrigir no syncword,
     e uma rajada que chegava fora da fase da anterior perdia bits isolados do
-    sync. Ao vivo: 7 a 9% dos quadros, nas duas cadeias.
+    sync. Ao vivo na bancada RF: 5% dos quadros VHF e 9% dos UHF (o Gardner,
+    na mesma bancada, 0 de 240 nas duas cadeias).
 
     O Gardner usa a amostra do MEIO entre dois símbolos:
 
